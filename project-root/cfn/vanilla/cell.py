@@ -17,8 +17,8 @@ class PixelwiseLayerNorm(nn.Module):
                  num_channels: int,
                  eps: float = 1e-5,
                  elementwise_affine: bool = True,
-                 device=None, # Added for completeness, though parent module .to() handles it
-                 dtype=None): # Added for completeness
+                 device=None, 
+                 dtype=None): 
         super().__init__()
         self.num_channels = num_channels
         self.eps = eps
@@ -90,15 +90,15 @@ class CFNCell(nn.Module):
         channels: int,
         kernel_size: int = 3,
         padding_mode: Literal['zeros', 'reflect', 'replicate', 'circular'] = 'replicate',
-        normalization: Optional[Literal['group', 'layer']] = 'layer', # Defaulted to 'layer' as per paper's suggestion
+        normalization: Optional[Literal['group', 'layer']] = 'layer', # Defaulted to 'layer' as per my paper says
         group_norm_num_groups: int = 1, # Used only if normalization == 'group'
         bias: bool = True,
-        gate_bias_init: Optional[float] = 2.0, # Biasing gate towards 1 initially
+        gate_bias_init: Optional[float] = 2.0, # Biasing gate towards 1 initially hmmm
     ):
         super().__init__()
 
         if channels <= 0:
-            raise ValueError("Number of channels must be positive.")
+            raise ValueError("# of channels must be positive...")
         if kernel_size <= 0 or kernel_size % 2 == 0:
             raise ValueError("kernel_size must be a positive odd integer.")
 
@@ -112,12 +112,12 @@ class CFNCell(nn.Module):
 
         padding = kernel_size // 2
 
-        # Convolution for the candidate state update path
+        # Convolution for da candidate state update path
         self.conv_u = nn.Conv2d(channels, channels, kernel_size,
                                 padding=padding,
                                 padding_mode=padding_mode,
                                 bias=bias)
-        # Convolution for the gate path
+        # zis is a convultion for za gate path 
         self.conv_g = nn.Conv2d(channels, channels, kernel_size,
                                 padding=padding,
                                 padding_mode=padding_mode,
@@ -144,12 +144,12 @@ class CFNCell(nn.Module):
 
     def _reset_parameters(self) -> None:
         """Reinitialize model parameters according to common practices and paper suggestions."""
-        # Initialize conv weights for candidate state path (followed by tanh)
+        # Initialize conv weights for candidate state path (followed by tanh) bruh
         init.kaiming_normal_(self.conv_u.weight, mode='fan_in', nonlinearity='tanh')
         if self.conv_u.bias is not None:
             init.zeros_(self.conv_u.bias)
 
-        # Initialize conv weights for gate path (followed by sigmoid)
+        # Initialize conv weights for gate path zen we follow it by sigmoid HELL YEAH
         init.kaiming_normal_(self.conv_g.weight, mode='fan_in', nonlinearity='sigmoid')
         if self.conv_g.bias is not None:
             if self.gate_bias_init is not None:

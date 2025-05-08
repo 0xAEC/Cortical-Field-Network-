@@ -12,7 +12,7 @@ import time
 # Make sure to adjust relative imports based on your project structure if run from project-root
 # If run from 0xaec-cortical-field-network- (one level up from project-root), these are correct
 from cfn.vanilla.model import VanillaCFN
-from cfn.data.tasks import get_denoising_mnist_loaders # Assumes MNIST denoising task
+from data.tasks import get_denoising_mnist_loaders # Assumes MNIST denoising task
 # For a generic setup, you might import a more general data factory function
 
 # --- Configuration & Argument Parsing ---

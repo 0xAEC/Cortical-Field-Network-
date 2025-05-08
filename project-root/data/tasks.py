@@ -4,7 +4,6 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
 import os
 
-# --- Simple Denoising MNIST Dataset ---
 class NoisyMNISTDataset(Dataset):
     """
     A dataset that wraps MNIST, adds noise to images, and returns (noisy_image, clean_image).

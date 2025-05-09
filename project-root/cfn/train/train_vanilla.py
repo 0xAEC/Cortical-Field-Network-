@@ -79,18 +79,27 @@ def train(args):
     
     os.makedirs(args.save_dir, exist_ok=True)
     with open(os.path.join(args.save_dir, 'args.json'), 'w') as f:
-args_dict = vars(args)
-# Convert non-serializable items (like torch.device) to strings
-serializable_args = {}
-for key, value in args_dict.items():
-    if isinstance(value, torch.device):
-        serializable_args[key] = str(value) # Store 'cuda' or 'cpu' as string
-    # Add other type checks here if needed (e.g., for custom objects)
-    else:
-        serializable_args[key] = value # Keep other values as is
+     # === Start Paste ===
+     args_dict = vars(args)
+     # Convert non-serializable items (like torch.device) to strings
+     serializable_args = {}
+     for key, value in args_dict.items():
+         if isinstance(value, torch.device):
+             serializable_args[key] = str(value) # Store 'cuda' or 'cpu' as string
+         # Add other type checks here if needed (e.g., for function objects)
+         elif callable(value): # Example: skip functions if any sneaked in
+             serializable_args[key] = f"<function {value.__name__}>" # Or just skip
+         else:
+             try:
+                 # Attempt to include value, skip if truly not serializable
+                 json.dumps(value) # Test serializability
+                 serializable_args[key] = value
+             except TypeError:
+                 serializable_args[key] = f"<non-serializable type: {type(value).__name__}>"
 
-# Dump the serializable dictionary
-json.dump(serializable_args, f, indent=4)
+     # Dump the serializable dictionary
+     json.dump(serializable_args, f, indent=4)
+     # === End Paste ===
 
     print(f"Using device: {args.device}")
     print("Config:")

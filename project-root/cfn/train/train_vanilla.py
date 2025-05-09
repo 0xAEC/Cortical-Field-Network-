@@ -6,10 +6,10 @@ import torch.nn.functional as F
 import argparse
 import os
 import json
-from tqdm import tqdm # For progress bars
+from tqdm import tqdm 
 import time
 
-# This import assumes the script is run from project-root (CWD) and PYTHONPATH="." is effectively set,
+# This import assumes the script is run from project-root (CWD) and PYTHONPATH="." is effectively set,this is also crucial for me uhh when running the training script.... 
 # making 'cfn' and 'data' top-level packages for the interpreter.
 from cfn.vanilla.model import VanillaCFN
 from data.tasks import get_denoising_mnist_loaders # Assumes MNIST denoising task

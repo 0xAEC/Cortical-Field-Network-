@@ -68,14 +68,13 @@ def train(args):
     if args.use_cuda:
         torch.cuda.manual_seed(args.seed)
 
-    # Ensure save_dir and data_root are treated as relative to the script's location (project-root)
-    # For clarity, could make them absolute if script location isn't guaranteed,
-    # but with CWD=project-root, this should be fine.
-    script_dir_parent = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')) # Should be project-root
-    
-    # Use os.path.join to make paths robust
-    save_dir = os.path.join(script_dir_parent, args.save_dir)
-    data_root = os.path.join(script_dir_parent, args.data_root)
+    # Make paths absolute based on the script's presumed parent (project-root)
+    # Assumes this train_vanilla.py script is inside project-root/cfn/train/
+    script_location_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root_dir = os.path.abspath(os.path.join(script_location_dir, '..', '..')) # Up two levels to project-root
+
+    save_dir = os.path.join(project_root_dir, args.save_dir)
+    data_root = os.path.join(project_root_dir, args.data_root) # For data downloaded by the script
 
     os.makedirs(save_dir, exist_ok=True)
     with open(os.path.join(save_dir, 'args.json'), 'w') as f:
@@ -95,11 +94,10 @@ def train(args):
         json.dump(serializable_args, f, indent=4)
 
     print(f"Using device: {args.device}")
-    print("Processed Config (paths are now absolute or well-defined relative to project root):")
-    # Print serializable args, ensuring save_dir and data_root reflect full context if made absolute
+    print("Effective Config:")
     temp_display_args = serializable_args.copy()
-    temp_display_args['save_dir_abs'] = save_dir
-    temp_display_args['data_root_abs'] = data_root
+    temp_display_args['save_dir_resolved'] = save_dir
+    temp_display_args['data_root_resolved'] = data_root
     for k, v in temp_display_args.items():
         print(f"  {k}: {v}")
     print("-" * 30)
@@ -110,7 +108,7 @@ def train(args):
     train_loader, val_loader = get_denoising_mnist_loaders(
         batch_size=args.batch_size,
         noise_factor=args.noise_factor,
-        data_root_dir=data_root # Use potentially adjusted data_root
+        data_root_dir=data_root # Use resolved data_root
     )
     task_loss_fn = mse_loss_no_reduction
 
@@ -139,7 +137,7 @@ def train(args):
             'dropout_prob': 0.0
         }
 
-    # Correct indentation for this block starts here
+    # INDENTATION OF THIS BLOCK IS CRITICAL
     model = VanillaCFN(
         input_raw_channels=input_raw_channels,
         output_raw_channels=output_raw_channels,
@@ -163,7 +161,6 @@ def train(args):
     for epoch in range(1, args.epochs + 1):
         epoch_start_time = time.time()
         model.train()
-        # Reset accumulators for each epoch
         total_train_loss_epoch = 0
         total_train_task_loss_epoch = 0
         total_train_ponder_loss_epoch = 0
@@ -195,20 +192,24 @@ def train(args):
             total_train_expected_steps_epoch += outputs.get('expected_ponder_cost_scalar', torch.tensor(0.0)).item()
             num_train_batches_epoch +=1
 
-
             if (batch_idx + 1) % args.log_interval == 0 or (batch_idx + 1) == len(train_loader):
-                current_avg_loss = total_train_loss_epoch / num_train_batches_epoch
-                current_avg_task_loss = total_train_task_loss_epoch / num_train_batches_epoch
-                current_avg_ponder_loss = total_train_ponder_loss_epoch / num_train_batches_epoch
-                current_avg_expected_steps = total_train_expected_steps_epoch / num_train_batches_epoch
-                
-                progress_bar.set_postfix({
-                    'Loss': f'{current_avg_loss:.4f}',
-                    'TaskL': f'{current_avg_task_loss:.4f}',
-                    'PondL': f'{current_avg_ponder_loss:.4f}', # E[N]
-                    'ExpSteps': f'{current_avg_expected_steps:.2f}' # E[N]
-                })
-        
+                if num_train_batches_epoch > 0 : # Avoid division by zero if log_interval is smaller than seen batches
+                    current_avg_loss = total_train_loss_epoch / num_train_batches_epoch if (batch_idx +1) % args.log_interval != 0 else total_train_loss_epoch / args.log_interval
+                    current_avg_task_loss = total_train_task_loss_epoch / num_train_batches_epoch if (batch_idx +1) % args.log_interval != 0 else total_train_task_loss_epoch / args.log_interval
+                    current_avg_ponder_loss = total_train_ponder_loss_epoch / num_train_batches_epoch if (batch_idx +1) % args.log_interval != 0 else total_train_ponder_loss_epoch / args.log_interval
+                    current_avg_expected_steps = total_train_expected_steps_epoch / num_train_batches_epoch if (batch_idx +1) % args.log_interval != 0 else total_train_expected_steps_epoch / args.log_interval
+                    
+                    progress_bar.set_postfix({
+                        'Loss': f'{current_avg_loss:.4f}',
+                        'TaskL': f'{current_avg_task_loss:.4f}',
+                        'PondL': f'{current_avg_ponder_loss:.4f}',
+                        'ExpSteps': f'{current_avg_expected_steps:.2f}'
+                    })
+                    if (batch_idx+1) % args.log_interval == 0 : # Reset for next interval if this was an interval boundary
+                         total_train_loss_epoch, total_train_task_loss_epoch, total_train_ponder_loss_epoch, total_train_expected_steps_epoch = 0,0,0,0
+                         num_train_batches_epoch = 0
+
+
         model.eval()
         total_val_loss = 0
         total_val_task_loss = 0
@@ -226,17 +227,17 @@ def train(args):
                 if loss_val is not None:
                     if torch.isnan(loss_val) or torch.isinf(loss_val):
                         print(f"Warning: NaN/Inf validation loss at epoch {epoch}. Value: {loss_val.item()}")
-                        continue # Skip this batch for aggregation
+                        continue
                     total_val_loss += loss_val.item()
                     total_val_task_loss += outputs.get('loss_task', torch.tensor(0.0)).item()
                     total_val_ponder_loss += outputs.get('loss_ponder_regularization', torch.tensor(0.0)).item()
                     total_val_expected_steps += outputs.get('expected_ponder_cost_scalar', torch.tensor(0.0)).item()
                 else:
                     print("Warning: Total loss not found during validation. Aggregating only steps.")
-                    total_val_expected_steps += outputs.get('expected_ponder_cost_scalar', torch.tensor(0.0)).item() # Still log steps
+                    total_val_expected_steps += outputs.get('expected_ponder_cost_scalar', torch.tensor(0.0)).item()
                 num_val_batches += 1
         
-        avg_val_loss = total_val_loss / num_val_batches if num_val_batches > 0 else float('inf') # Default to inf if no valid batches
+        avg_val_loss = total_val_loss / num_val_batches if num_val_batches > 0 else float('inf')
         avg_val_task_loss = total_val_task_loss / num_val_batches if num_val_batches > 0 else 0
         avg_val_ponder_loss = total_val_ponder_loss / num_val_batches if num_val_batches > 0 else 0
         avg_val_expected_steps = total_val_expected_steps / num_val_batches if num_val_batches > 0 else 0
@@ -274,10 +275,8 @@ def train(args):
 
 if __name__ == '__main__':
     args = get_args()
-    # Field channels for SinePositionalEncoding2D usually needs to be divisible by 4
-    # This check should happen *before* model instantiation if pe is enabled
     if not args.disable_pos_enc and args.field_channels % 4 != 0 :
         print(f"ERROR: field_channels ({args.field_channels}) must be divisible by 4 for AddSinePositionalEncoding2D when positional encoding is enabled.")
         print("Please adjust --field_channels or use --disable_pos_enc.")
-        exit() # Or raise an error
+        exit()
     train(args)

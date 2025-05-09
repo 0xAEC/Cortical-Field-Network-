@@ -303,7 +303,7 @@ def train(args):
     print("Training finished.")
     try:
         final_model_path = os.path.join(args.save_dir, 'final_model.pt')
-        torch.save(model.state_dict(), final_model_path)
+        torch.save(model.state_dict(), final_model_path) 
         print(f"Final model saved to {final_model_path}")
     except Exception as e:
         print(f"Error saving final model: {e}")

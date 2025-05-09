@@ -139,12 +139,18 @@ def train(args):
     # Define pos_enc_kwargs but remove 'max_grid_shape' as it's passed via grid_shape arg now
     # Ensure alpha related keys exist even if PE is disabled, or handle it in model __init__ better.
     # Let's define it conditionally:
-    pos_enc_specific_kwargs = {}
-    if not args.disable_pos_enc:
-         pos_enc_specific_kwargs = {
-            'alpha': 1.0, # Fixed scale factor example
-            'scale_factor_learnable': False # Fixed scale factor example
-         }
+# train_vanilla.py - CORRECTED CODE block ts is to argh
+pos_enc_specific_kwargs = {}
+if not args.disable_pos_enc:
+     pos_enc_specific_kwargs = {
+         # Define the *arguments expected by AddSinePositionalEncoding2D*
+         'scale_factor_learnable': False,  # Example: Fixed scaling factor
+         'initial_scale_factor': 1.0,    # Example: The value of the fixed factor is 1.0
+         'temperature': 10000.0,         # Optionally pass other PE params here too
+         'normalize_pe': False,
+         'dropout_prob': 0.0
+         # Add any other valid AddSinePositionalEncoding2D arguments here if needed
+     }
 
     # Instantiate VanillaCFN model
     model = VanillaCFN(

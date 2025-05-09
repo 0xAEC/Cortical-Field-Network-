@@ -79,7 +79,18 @@ def train(args):
     
     os.makedirs(args.save_dir, exist_ok=True)
     with open(os.path.join(args.save_dir, 'args.json'), 'w') as f:
-        json.dump(vars(args), f, indent=4)
+args_dict = vars(args)
+# Convert non-serializable items (like torch.device) to strings
+serializable_args = {}
+for key, value in args_dict.items():
+    if isinstance(value, torch.device):
+        serializable_args[key] = str(value) # Store 'cuda' or 'cpu' as string
+    # Add other type checks here if needed (e.g., for custom objects)
+    else:
+        serializable_args[key] = value # Keep other values as is
+
+# Dump the serializable dictionary
+json.dump(serializable_args, f, indent=4)
 
     print(f"Using device: {args.device}")
     print("Config:")

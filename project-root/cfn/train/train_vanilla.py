@@ -10,15 +10,16 @@ from tqdm import tqdm # For progress bars
 import time
 
 # Make sure to adjust relative imports based on your project structure if run from project-root
-# If run from 0xaec-cortical-field-network- (one level up from project-root), these are correct
+# This import assumes the script is run from project-root and PYTHONPATH="." is set,
+# or if run from parent using python -m project-root.cfn.train.train_vanilla
 from cfn.vanilla.model import VanillaCFN
+# This import assumes data/tasks.py is a top-level package/module relative to project-root
 from data.tasks import get_denoising_mnist_loaders # Assumes MNIST denoising task
-# For a generic setup, you might import a more general data factory function
 
 # --- Configuration & Argument Parsing ---
 def get_args():
     parser = argparse.ArgumentParser(description="Train Vanilla CFN with PonderNet")
-    
+
     # Data args
     parser.add_argument('--data_root', type=str, default='./data', help='Root directory for datasets')
     parser.add_argument('--batch_size', type=int, default=32, help='Input batch size for training')
@@ -42,9 +43,6 @@ def get_args():
     parser.add_argument('--halt_kernel_size', type=int, default=1)
     parser.add_argument('--halt_bias_init', type=float, default=-3.0)
 
-    # Model args: Input/Output Encoders (simplified for now, can extend to load custom modules)
-    # For this example, we use default 1x1 convs or slightly deeper ones based on task.
-
     # Training args
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to train')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
@@ -56,13 +54,13 @@ def get_args():
     parser.add_argument('--no_cuda', action='store_true', help='Disables CUDA training')
 
     args = parser.parse_args()
-    
+
     # Post-process some args
     args.use_cuda = not args.no_cuda and torch.cuda.is_available()
     args.device = torch.device("cuda" if args.use_cuda else "cpu")
-    if args.cell_normalization.lower() == 'none':
-        args.cell_normalization = None
-        
+    if args.cell_normalization is not None and args.cell_normalization.lower() == 'none':
+        args.cell_normalization = None # Ensure None type if 'none' string is passed
+
     return args
 
 # --- Task-Specific Loss Function ---
@@ -76,39 +74,35 @@ def train(args):
     torch.manual_seed(args.seed)
     if args.use_cuda:
         torch.cuda.manual_seed(args.seed)
-    
-    os.makedirs(args.save_dir, exist_ok=True)
-    with open(os.path.join(args.save_dir, 'args.json'), 'w') as f:
-     # === Start Paste ===
-     args_dict = vars(args)
-     # Convert non-serializable items (like torch.device) to strings
-     serializable_args = {}
-     for key, value in args_dict.items():
-         if isinstance(value, torch.device):
-             serializable_args[key] = str(value) # Store 'cuda' or 'cpu' as string
-         # Add other type checks here if needed (e.g., for function objects)
-         elif callable(value): # Example: skip functions if any sneaked in
-             serializable_args[key] = f"<function {value.__name__}>" # Or just skip
-         else:
-             try:
-                 # Attempt to include value, skip if truly not serializable
-                 json.dumps(value) # Test serializability
-                 serializable_args[key] = value
-             except TypeError:
-                 serializable_args[key] = f"<non-serializable type: {type(value).__name__}>"
 
-     # Dump the serializable dictionary
-     json.dump(serializable_args, f, indent=4)
-     # === End Paste ===
+    os.makedirs(args.save_dir, exist_ok=True)
+    # --- Corrected code for saving args ---
+    with open(os.path.join(args.save_dir, 'args.json'), 'w') as f:
+        # Intentionally placed block with correct indentation
+        args_dict = vars(args)
+        serializable_args = {}
+        for key, value in args_dict.items():
+            if isinstance(value, torch.device):
+                serializable_args[key] = str(value)
+            elif callable(value):
+                serializable_args[key] = f"<function {value.__name__}>"
+            else:
+                try:
+                    json.dumps(value)
+                    serializable_args[key] = value
+                except TypeError:
+                    serializable_args[key] = f"<non-serializable type: {type(value).__name__}>"
+        json.dump(serializable_args, f, indent=4)
+    # --- End Corrected code ---
 
     print(f"Using device: {args.device}")
     print("Config:")
-    for k, v in vars(args).items():
+    # Print the *serializable* args to console as well for confirmation
+    for k, v in serializable_args.items(): # Use serializable_args here
         print(f"  {k}: {v}")
     print("-" * 30)
 
     # --- Data ---
-    # For MNIST denoising:
     input_raw_channels = 1
     output_raw_channels = 1
     grid_shape = (28, 28) # H, W for MNIST
@@ -132,40 +126,46 @@ def train(args):
         'halting_bias_init': args.halt_bias_init,
         'kernel_size': args.halt_kernel_size
     }
-    # Simple input/output encoders for denoising task
-    # Can be made more sophisticated
+    # Use 3x3 encoders/decoders for this denoising task example
     input_encoder = nn.Conv2d(input_raw_channels, args.field_channels, kernel_size=3, padding=1)
     output_decoder = nn.Conv2d(args.field_channels, output_raw_channels, kernel_size=3, padding=1)
-    
-    # Initialize encoders explicitly for this example
+
+    # Initialize these encoders/decoders
     nn.init.kaiming_normal_(input_encoder.weight, nonlinearity='relu')
     if input_encoder.bias is not None: nn.init.zeros_(input_encoder.bias)
-    nn.init.kaiming_normal_(output_decoder.weight, nonlinearity='linear') # Final layer often linear
+    nn.init.kaiming_normal_(output_decoder.weight, nonlinearity='linear')
     if output_decoder.bias is not None: nn.init.zeros_(output_decoder.bias)
 
+    # Define pos_enc_kwargs but remove 'max_grid_shape' as it's passed via grid_shape arg now
+    # Ensure alpha related keys exist even if PE is disabled, or handle it in model __init__ better.
+    # Let's define it conditionally:
+    pos_enc_specific_kwargs = {}
+    if not args.disable_pos_enc:
+         pos_enc_specific_kwargs = {
+            'alpha': 1.0, # Fixed scale factor example
+            'scale_factor_learnable': False # Fixed scale factor example
+         }
 
+    # Instantiate VanillaCFN model
     model = VanillaCFN(
         input_raw_channels=input_raw_channels,
         output_raw_channels=output_raw_channels,
         field_channels=args.field_channels,
-        grid_shape=grid_shape,
-        cfn_cell_kwargs=cfn_cell_kwargs,
-        halting_unit_kwargs=halting_unit_kwargs,
+        cfn_cell_kwargs=cfn_cell_kwargs,          # REQUIRED non-default
+        halting_unit_kwargs=halting_unit_kwargs,  # REQUIRED non-default
+        grid_shape=grid_shape if not args.disable_pos_enc else None, # Pass only if needed
         max_steps=args.max_steps,
         ponder_reg_beta=args.ponder_reg_beta,
         use_positional_encoding=not args.disable_pos_enc,
-        pos_enc_kwargs={'max_grid_shape': grid_shape, 'alpha': 1.0, 'scale_factor_learnable': False}, # Example
-        input_encoder=input_encoder,
-        output_decoder=output_decoder,
+        pos_enc_kwargs=pos_enc_specific_kwargs,   # Use the filtered dict
+        input_encoder=input_encoder,              # Pass custom encoder
+        output_decoder=output_decoder,            # Pass custom decoder
     ).to(args.device)
 
     print(f"\nModel created with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
-    # print(model) # Can be very verbose
 
     # --- Optimizer ---
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    # Consider a learning rate scheduler
-    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5) 
 
     # --- Training Loop ---
     best_val_loss = float('inf')
@@ -176,46 +176,55 @@ def train(args):
         total_train_task_loss = 0
         total_train_ponder_loss = 0
         total_train_expected_steps = 0
-        
+
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs} [Train]")
         for batch_idx, (x_raw, target) in enumerate(progress_bar):
             x_raw, target = x_raw.to(args.device), target.to(args.device)
 
             optimizer.zero_grad()
-            
-            # Forward pass
+
             outputs = model(x_raw, target=target, task_loss_fn_noreduction=task_loss_fn)
-            
+
             loss = outputs.get('loss_total')
             if loss is None:
                 print("Warning: Total loss not found in model outputs during training.")
-                continue
-            
+                continue # Skip backprop if loss is missing
+
+            # Check for NaN loss
+            if torch.isnan(loss):
+                print(f"ERROR: NaN loss encountered at epoch {epoch}, batch {batch_idx}. Stopping.")
+                # Optionally save state or raise error
+                # torch.save(model.state_dict(), os.path.join(args.save_dir, 'nan_error_model.pt'))
+                return # Stop training
+
             loss.backward()
             if args.grad_clip_value > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_value)
             optimizer.step()
 
+            # Accumulate stats (ensure items are detached if accumulating gradients is not intended)
             total_train_loss += loss.item()
             total_train_task_loss += outputs.get('loss_task', torch.tensor(0.0)).item()
             total_train_ponder_loss += outputs.get('loss_ponder_regularization', torch.tensor(0.0)).item()
-            total_train_expected_steps += outputs.get('expected_ponder_cost_scalar', torch.tensor(0.0)).item() # Use ponder cost here
+            # Use expected_ponder_cost_scalar which is E[N] where N=num_steps (1..max_steps)
+            total_train_expected_steps += outputs.get('expected_ponder_cost_scalar', torch.tensor(0.0)).item()
 
             if (batch_idx + 1) % args.log_interval == 0:
+                # Calculate averages for the interval
+                samples_in_interval = args.log_interval * args.batch_size # Adjust if last batch smaller? Roughly ok.
                 avg_loss = total_train_loss / args.log_interval
                 avg_task_loss = total_train_task_loss / args.log_interval
                 avg_ponder_loss = total_train_ponder_loss / args.log_interval
                 avg_expected_steps = total_train_expected_steps / args.log_interval
-                
+
                 progress_bar.set_postfix({
                     'Loss': f'{avg_loss:.4f}',
                     'TaskL': f'{avg_task_loss:.4f}',
-                    'PondL': f'{avg_ponder_loss:.4f}',
-                    'ExpSteps': f'{avg_expected_steps:.2f}'
+                    'PondL': f'{avg_ponder_loss:.4f}', # This is L_P / beta_P = E[N]
+                    'ExpSteps': f'{avg_expected_steps:.2f}' # E[N] is the expected number of steps
                 })
-                total_train_loss, total_train_task_loss, total_train_ponder_loss, total_train_expected_steps = 0,0,0,0
-        
-        # if scheduler: scheduler.step()
+                # Reset interval accumulators
+                total_train_loss, total_train_task_loss, total_train_ponder_loss, total_train_expected_steps = 0, 0, 0, 0
 
         # --- Validation Loop ---
         model.eval()
@@ -230,39 +239,70 @@ def train(args):
             for x_raw, target in val_progress_bar:
                 x_raw, target = x_raw.to(args.device), target.to(args.device)
                 outputs = model(x_raw, target=target, task_loss_fn_noreduction=task_loss_fn)
-                
-                loss = outputs.get('loss_total', torch.tensor(0.0)) # Handle if not present (e.g. if model.eval behavior changes)
-                total_val_loss += loss.item()
-                total_val_task_loss += outputs.get('loss_task', torch.tensor(0.0)).item()
-                total_val_ponder_loss += outputs.get('loss_ponder_regularization', torch.tensor(0.0)).item()
-                total_val_expected_steps += outputs.get('expected_ponder_cost_scalar', torch.tensor(0.0)).item()
+
+                # Calculate loss for validation (model computes it internally if target provided)
+                loss = outputs.get('loss_total')
+                if loss is not None:
+                     total_val_loss += loss.item()
+                     total_val_task_loss += outputs.get('loss_task', torch.tensor(0.0)).item()
+                     total_val_ponder_loss += outputs.get('loss_ponder_regularization', torch.tensor(0.0)).item()
+                     total_val_expected_steps += outputs.get('expected_ponder_cost_scalar', torch.tensor(0.0)).item()
+                else:
+                     # If loss calculation relies on self.training, we might need to manually calc val loss
+                     # Or just rely on task-specific metrics like MSE/PSNR from final_output
+                     print("Warning: Total loss not found during validation.")
+
                 num_val_batches += 1
 
+        # Calculate averages
         avg_val_loss = total_val_loss / num_val_batches if num_val_batches > 0 else 0
         avg_val_task_loss = total_val_task_loss / num_val_batches if num_val_batches > 0 else 0
         avg_val_ponder_loss = total_val_ponder_loss / num_val_batches if num_val_batches > 0 else 0
         avg_val_expected_steps = total_val_expected_steps / num_val_batches if num_val_batches > 0 else 0
-        
+
         epoch_duration = time.time() - epoch_start_time
         print(f"Epoch {epoch} Summary: Val_Loss: {avg_val_loss:.4f} | Val_TaskL: {avg_val_task_loss:.4f} | "
-              f"Val_PondL: {avg_val_ponder_loss:.4f} | Val_ExpSteps: {avg_val_expected_steps:.2f} | Time: {epoch_duration:.2f}s")
+              f"Val_PondL(E[N]): {avg_val_ponder_loss:.4f} | Val_ExpSteps: {avg_val_expected_steps:.2f} | Time: {epoch_duration:.2f}s")
 
-        # Save best model
-        if avg_val_loss < best_val_loss:
+        # Save best model based on validation loss
+        if num_val_batches > 0 and avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            model_path = os.path.join(args.save_dir, f'best_model_epoch{epoch}.pt')
-            torch.save(model.state_dict(), model_path)
-            print(f"Saved new best model to {model_path} (Val Loss: {best_val_loss:.4f})")
-        
-        # Save latest model
-        latest_model_path = os.path.join(args.save_dir, 'latest_model.pt')
-        torch.save(model.state_dict(), latest_model_path)
+            try:
+                 model_path = os.path.join(args.save_dir, f'best_model_epoch_{epoch}_loss_{best_val_loss:.4f}.pt')
+                 torch.save(model.state_dict(), model_path)
+                 print(f"Saved new best model to {model_path} (Val Loss: {best_val_loss:.4f})")
+            except Exception as e:
+                 print(f"Error saving best model: {e}")
+
+
+        # Save latest model checkpoint
+        try:
+            latest_model_path = os.path.join(args.save_dir, 'latest_model.pt')
+            torch.save({
+                 'epoch': epoch,
+                 'model_state_dict': model.state_dict(),
+                 'optimizer_state_dict': optimizer.state_dict(),
+                 'best_val_loss': best_val_loss,
+                 # 'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
+                 'args': serializable_args # Save args used
+            }, latest_model_path)
+        except Exception as e:
+             print(f"Error saving latest model checkpoint: {e}")
+
 
     print("Training finished.")
-    final_model_path = os.path.join(args.save_dir, 'final_model.pt')
-    torch.save(model.state_dict(), final_model_path)
-    print(f"Final model saved to {final_model_path}")
+    try:
+         final_model_path = os.path.join(args.save_dir, 'final_model.pt')
+         torch.save(model.state_dict(), final_model_path)
+         print(f"Final model saved to {final_model_path}")
+    except Exception as e:
+         print(f"Error saving final model: {e}")
+
 
 if __name__ == '__main__':
     args = get_args()
+    # Basic check before running train
+    if args.field_channels % 4 != 0 and not args.disable_pos_enc:
+        print(f"Warning: field_channels ({args.field_channels}) is not divisible by 4. "
+              "SinePositionalEncoding2D expects this if enabled.")
     train(args)
